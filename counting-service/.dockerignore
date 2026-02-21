@@ -1,0 +1,15 @@
+# Ignore the build artifacts and temporary files for the counting service
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.log
+*.tmp
+.DS_Store
+node_modules/
+build/
+dist/
+tmp/
+temp/
+.cache/
+.vscode/

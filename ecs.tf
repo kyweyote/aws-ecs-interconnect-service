@@ -233,9 +233,9 @@ resource "aws_ecs_service" "counting_service" {
   enable_execute_command = true
 
   network_configuration {
-    subnets          = aws_subnet.main[*].id
+    subnets          = aws_subnet.private[*].id
     security_groups  = [aws_security_group.ecs_tasks.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
 
   service_registries {

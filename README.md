@@ -6,7 +6,7 @@ Reference: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-c
 
 ## Architecture Overview
 
-![Architecture](assets/service-discovery.png)
+![Architecture](assets/service-connect.png)
 
 ## What this deploys
 

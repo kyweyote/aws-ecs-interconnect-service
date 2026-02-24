@@ -1,8 +1,8 @@
-# AWS ECS Service Discovery Demo
+# AWS ECS Service Connect + TLS Demo
 
-This project demonstrates production-style service discovery on AWS ECS Fargate using AWS Cloud Map private DNS.
+This project demonstrates service-to-service communication on AWS ECS Fargate using ECS Service Connect with TLS encryption.
 
-Reference: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-discovery.html
+Reference: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-connect.html
 
 ## Architecture Overview
 
@@ -12,19 +12,20 @@ Reference: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-d
 
 - 1 ECS cluster: `services-cluster`
 - 2 ECS services:
-  - `dashboard-service` on port `9002` (publicly reachable)
-  - `counting-service` on port `9003` (internal-only, private subnets)
-- Cloud Map private namespace: `services.local`
+  - `dashboard-service` exposed on port `9002` (public subnet)
+  - `counting-service` internal on port `9003` (private subnet)
+- ECS Service Connect namespace: `services.local` (Cloud Map HTTP namespace)
+- Service Connect aliases:
+  - `dashboard-dns:80`
+  - `counting-dns:80`
+- TLS between service proxies using ACM Private CA
 - ECR repositories and image push flow
-- Security group rules:
-  - Internet -> `dashboard-service:9002`
-  - ECS tasks -> `counting-service:9003`
 
 ## Service-to-service call path
 
-`dashboard-service` resolves and calls:
+`dashboard-service` calls `counting-service` through Service Connect alias:
 
-`COUNTING_SERVICE_URL=http://counting-service.services.local:9003`
+`COUNTING_SERVICE_URL=http://counting-dns`
 
 ## Deploy
 
@@ -36,71 +37,74 @@ terraform apply -auto-approve
 
 ## Validation walkthrough
 
-### 1) Open a shell in dashboard task
+### 1) Open shell inside dashboard task
 
 ```bash
 aws ecs execute-command --cluster services-cluster \
-    --task arn:aws:ecs:ap-southeast-1:886436964547:task/services-cluster/233b213e05134ceab7ab934da47d65ca \
-    --container dashboard-service --region ap-southeast-1 --profile master-user \
-    --interactive \
-    --command "/bin/sh"
+  --task <dashboard-task-arn> \
+  --container dashboard-service \
+  --region ap-southeast-1 \
+  --profile master-user \
+  --interactive \
+  --command "/bin/sh"
 ```
 
-### 2) Verify DNS resolution for counting service
+### 2) Verify Service Connect DNS alias
 
 Inside dashboard container:
 
 ```bash
-nslookup counting-service.services.local
-```
-![nslookup result](assets/nslookup.png)
+apk update && apk add curl
+curl -iv http://counting-dns
+#output
+* Host counting-dns:80 was resolved.
+* IPv6: 2600:f0f0::1
+* IPv4: 127.255.0.1
+*   Trying [2600:f0f0::1]:80...
+* Immediate connect fail for 2600:f0f0::1: Network unreachable
+*   Trying 127.255.0.1:80...
+* Established connection to counting-dns (127.255.0.1 port 80) from 127.0.0.1 port 41076 
+* using HTTP/1.x
+> GET / HTTP/1.1
+> Host: counting-dns
+> User-Agent: curl/8.17.0
+> Accept: */*
+> 
+* Request completely sent off
+< HTTP/1.1 200 OK
+HTTP/1.1 200 OK
+< Date: Tue, 24 Feb 2026 13:42:18 GMT
+Date: Tue, 24 Feb 2026 13:42:18 GMT
+< Content-Length: 73
+Content-Length: 73
+< Content-Type: text/plain; charset=utf-8
+Content-Type: text/plain; charset=utf-8
+< 
 
-### 3) Verify public access to dashboard
+* Connection #0 to host counting-dns:80 left intact
+{"count":64,"hostname":"ip-10-0-102-186.ap-southeast-1.compute.internal"}
+```
+
+### 3) Verify TLS certificate presented by counting service proxy
+
+Inside dashboard container:
+
+```bash
+apk add openssl
+openssl s_client -connect 10.0.102.186:9003 < /dev/null 2> /dev/null | openssl x509 -noout -text
+```
+
+Observed result from test:
+- Certificate returned successfully
+- `Issuer: O=Test`
+- Subject Alternative Name includes `DNS:counting-dns.services.local`
+- Extended Key Usage includes server and client authentication
+
+This confirms Service Connect TLS is active on the internal service-to-service path.
+
+### 4) Verify dashboard public endpoint
 
 Open:
 
-`http://<dashboard_service_public_ip>:9002`
-
-Evidence:
-
-![dashboard result](assets/result.png)
-
-### 4) Verify Cloud Map + Route 53 records
-
-Cloud Map namespace/services:
-
-![cloud map](assets/cloudmap.png)
-
-Route 53 private hosted zone records:
-
-![route53 records](assets/route53.png)
-
-## Scale-down test (service discovery consistency)
-
-Scale `counting-service` down and verify DNS updates accordingly.
-
-Counting service at 1 running task:
-
-![scale down task count](assets/scale-down.png)
-
-Route 53 reflects updated service instance set:
-
-![scale down records](assets/scale-down-records.png)
-
-Re-check from dashboard container:
-
-```bash
-nslookup counting-service.services.local
-#output
-Server:		10.0.0.2
-Address:	10.0.0.2:53
-
-Non-authoritative answer:
-Name:	counting-service.services.local
-Address: 10.0.1.63
-
-Non-authoritative answer:
-```
-
-
+`http://<dashboard_public_ip>:9002`
 

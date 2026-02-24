@@ -44,8 +44,20 @@ variable "ecs_cluster_name" {
 
 variable "service_discovery_namespace" {
   type        = string
-  description = "Service discovery namespace"
+  description = "Cloud Map namespace used by ECS Service Connect"
   default     = "services.local"
+}
+
+variable "service_connect_tls_enabled" {
+  type        = bool
+  description = "Enable TLS for ECS Service Connect services"
+  default     = true
+}
+
+variable "service_connect_tls_pca_arn" {
+  type        = string
+  description = "AWS Private CA ARN used by Service Connect TLS"
+  default     = ""
 }
 
 # Task Configuration

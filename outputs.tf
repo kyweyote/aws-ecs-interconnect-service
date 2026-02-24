@@ -1,5 +1,5 @@
 data "external" "dashboard_runtime" {
-	program = ["bash", "-lc", <<-EOT
+  program = ["bash", "-lc", <<-EOT
 		set -euo pipefail
 		query_json=$(cat)
 
@@ -58,19 +58,19 @@ data "external" "dashboard_runtime" {
 			--arg execute_command "$execute_command" \
 			'{task_arn:$task_arn, private_ip:$private_ip, public_ip:$public_ip, execute_command:$execute_command}'
 	EOT
-	]
+  ]
 
-	query = {
-		cluster   = aws_ecs_cluster.main.name
-		service   = aws_ecs_service.dashboard_service.name
-		region    = var.aws_region
-		profile   = var.aws_profile
-		container = "dashboard-service"
-	}
+  query = {
+    cluster   = aws_ecs_cluster.main.name
+    service   = aws_ecs_service.dashboard_service.name
+    region    = var.aws_region
+    profile   = var.aws_profile
+    container = "dashboard-service"
+  }
 }
 
 data "external" "counting_runtime" {
-	program = ["bash", "-lc", <<-EOT
+  program = ["bash", "-lc", <<-EOT
 		set -euo pipefail
 		query_json=$(cat)
 
@@ -110,32 +110,32 @@ data "external" "counting_runtime" {
 
 		jq -n --arg private_ip "$private_ip" '{private_ip:$private_ip}'
 	EOT
-	]
+  ]
 
-	query = {
-		cluster = aws_ecs_cluster.main.name
-		service = aws_ecs_service.counting_service.name
-		region  = var.aws_region
-		profile = var.aws_profile
-	}
+  query = {
+    cluster = aws_ecs_cluster.main.name
+    service = aws_ecs_service.counting_service.name
+    region  = var.aws_region
+    profile = var.aws_profile
+  }
 }
 
 output "dashboard_service_public_ip" {
-	value       = data.external.dashboard_runtime.result.public_ip
-	description = "Dashboard service public IP"
+  value       = data.external.dashboard_runtime.result.public_ip
+  description = "Dashboard service public IP"
 }
 
 output "dashboard_service_private_ip" {
-	value       = data.external.dashboard_runtime.result.private_ip
-	description = "Dashboard service private IP"
+  value       = data.external.dashboard_runtime.result.private_ip
+  description = "Dashboard service private IP"
 }
 
 output "counting_service_private_ip" {
-	value       = data.external.counting_runtime.result.private_ip
-	description = "Counting service private IP"
+  value       = data.external.counting_runtime.result.private_ip
+  description = "Counting service private IP"
 }
 
 output "dashboard_execute_command" {
-	value       = data.external.dashboard_runtime.result.execute_command
-	description = "Ready-to-run ECS execute-command for dashboard-service"
+  value       = data.external.dashboard_runtime.result.execute_command
+  description = "Ready-to-run ECS execute-command for dashboard-service"
 }

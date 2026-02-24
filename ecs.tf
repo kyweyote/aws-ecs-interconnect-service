@@ -2,6 +2,10 @@
 resource "aws_ecs_cluster" "main" {
   name = var.ecs_cluster_name
 
+  service_connect_defaults {
+    namespace = aws_service_discovery_http_namespace.main.arn
+  }
+
   tags = {
     Name = "ecs-cluster"
   }
@@ -74,6 +78,11 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 }
 
+resource "aws_iam_role_policy_attachment" "ecs_task_service_connect_tls_role_policy" {
+  role       = aws_iam_role.ecs_task_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForServiceConnectTransportLayerSecurity"
+}
+
 resource "aws_iam_role_policy" "ecs_task_policy" {
   name = "ecs-task-policy"
   role = aws_iam_role.ecs_task_role.id
@@ -104,13 +113,63 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
   })
 }
 
-# Cloud Map Namespace for Service Discovery
-resource "aws_service_discovery_private_dns_namespace" "main" {
+resource "aws_iam_role" "ecs_service_connect_tls_role" {
+  name = "ecs-service-connect-tls-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowECSServiceAssume"
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs.amazonaws.com"
+        }
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:ecs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_service_connect_tls_role_policy" {
+  role       = aws_iam_role.ecs_service_connect_tls_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForServiceConnectTransportLayerSecurity"
+}
+
+resource "aws_iam_role_policy" "ecs_service_connect_tls_pca_policy" {
+  name = "ecs-service-connect-tls-pca-policy"
+  role = aws_iam_role.ecs_service_connect_tls_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "acm-pca:DescribeCertificateAuthority",
+          "acm-pca:IssueCertificate",
+          "acm-pca:GetCertificate"
+        ]
+        Resource = var.service_connect_tls_pca_arn
+      }
+    ]
+  })
+}
+
+# Cloud Map namespace for ECS Service Connect
+resource "aws_service_discovery_http_namespace" "main" {
   name = var.service_discovery_namespace
-  vpc  = aws_vpc.main.id
 
   tags = {
-    Name = "service-discovery-namespace"
+    Name = "service-connect-namespace"
   }
 }
 
@@ -132,6 +191,7 @@ resource "aws_ecs_task_definition" "counting_service" {
 
       portMappings = [
         {
+          name          = "counting-service"
           containerPort = var.counting_service_port
           hostPort      = var.counting_service_port
           protocol      = "tcp"
@@ -163,6 +223,7 @@ resource "aws_ecs_task_definition" "dashboard_service" {
 
       portMappings = [
         {
+          name          = "dashboard-service"
           containerPort = var.dashboard_service_port
           hostPort      = var.dashboard_service_port
           protocol      = "tcp"
@@ -172,7 +233,7 @@ resource "aws_ecs_task_definition" "dashboard_service" {
       environment = [
         {
           name  = "COUNTING_SERVICE_URL"
-          value = "http://counting-service.${var.service_discovery_namespace}:${var.counting_service_port}"
+          value = "http://counting-dns"
         }
       ]
     }
@@ -183,53 +244,13 @@ resource "aws_ecs_task_definition" "dashboard_service" {
   }
 }
 
-# Service Discovery Service for Counting Service
-resource "aws_service_discovery_service" "counting_service" {
-  name = "counting-service"
-
-  dns_config {
-    namespace_id = aws_service_discovery_private_dns_namespace.main.id
-
-    dns_records {
-      ttl  = 10
-      type = "A"
-    }
-
-    routing_policy = "MULTIVALUE"
-  }
-
-  tags = {
-    Name = "counting-service-discovery"
-  }
-}
-
-# Service Discovery Service for Dashboard Service
-resource "aws_service_discovery_service" "dashboard_service" {
-  name = "dashboard-service"
-
-  dns_config {
-    namespace_id = aws_service_discovery_private_dns_namespace.main.id
-
-    dns_records {
-      ttl  = 10
-      type = "A"
-    }
-
-    routing_policy = "MULTIVALUE"
-  }
-
-  tags = {
-    Name = "dashboard-service-discovery"
-  }
-}
-
 # ECS Service for Counting Service
 resource "aws_ecs_service" "counting_service" {
-  name            = "counting-service"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.counting_service.arn
-  desired_count   = var.counting_service_desired_count
-  launch_type     = "FARGATE"
+  name                   = "counting-service"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.counting_service.arn
+  desired_count          = var.counting_service_desired_count
+  launch_type            = "FARGATE"
   enable_execute_command = true
 
   network_configuration {
@@ -238,24 +259,50 @@ resource "aws_ecs_service" "counting_service" {
     assign_public_ip = false
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.counting_service.arn
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.main.arn
+
+    service {
+      port_name      = "counting-service"
+      discovery_name = "counting-dns"
+
+      client_alias {
+        dns_name = "counting-dns"
+        port     = 80
+      }
+
+      dynamic "tls" {
+        for_each = var.service_connect_tls_enabled ? [1] : []
+        content {
+          issuer_cert_authority {
+            aws_pca_authority_arn = var.service_connect_tls_pca_arn
+          }
+          role_arn = aws_iam_role.ecs_service_connect_tls_role.arn
+        }
+      }
+    }
   }
 
   tags = {
     Name = "counting-service"
   }
 
-  depends_on = [aws_ecs_task_definition.counting_service]
+  depends_on = [
+    aws_ecs_task_definition.counting_service,
+    aws_iam_role_policy_attachment.ecs_task_service_connect_tls_role_policy,
+    aws_iam_role_policy_attachment.ecs_service_connect_tls_role_policy,
+    aws_iam_role_policy.ecs_service_connect_tls_pca_policy
+  ]
 }
 
 # ECS Service for Dashboard Service
 resource "aws_ecs_service" "dashboard_service" {
-  name            = "dashboard-service"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.dashboard_service.arn
-  desired_count   = var.dashboard_service_desired_count
-  launch_type     = "FARGATE"
+  name                   = "dashboard-service"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.dashboard_service.arn
+  desired_count          = var.dashboard_service_desired_count
+  launch_type            = "FARGATE"
   enable_execute_command = true
 
   network_configuration {
@@ -264,15 +311,41 @@ resource "aws_ecs_service" "dashboard_service" {
     assign_public_ip = true
   }
 
-  service_registries {
-    registry_arn = aws_service_discovery_service.dashboard_service.arn
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.main.arn
+
+    service {
+      port_name      = "dashboard-service"
+      discovery_name = "dashboard-dns"
+
+      client_alias {
+        dns_name = "dashboard-dns"
+        port     = 80
+      }
+
+      dynamic "tls" {
+        for_each = var.service_connect_tls_enabled ? [1] : []
+        content {
+          issuer_cert_authority {
+            aws_pca_authority_arn = var.service_connect_tls_pca_arn
+          }
+          role_arn = aws_iam_role.ecs_service_connect_tls_role.arn
+        }
+      }
+    }
   }
 
   tags = {
     Name = "dashboard-service"
   }
 
-  depends_on = [aws_ecs_task_definition.dashboard_service]
+  depends_on = [
+    aws_ecs_task_definition.dashboard_service,
+    aws_iam_role_policy_attachment.ecs_task_service_connect_tls_role_policy,
+    aws_iam_role_policy_attachment.ecs_service_connect_tls_role_policy,
+    aws_iam_role_policy.ecs_service_connect_tls_pca_policy
+  ]
 }
 
 # Auto Scaling Target for Counting Service

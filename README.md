@@ -75,7 +75,7 @@ Route 53 private hosted zone records:
 
 ![route53 records](assets/route53.png)
 
-## Scale-down test (service discovery consistency)
+## Scale-down test
 
 Scale `counting-service` down and verify DNS updates accordingly.
 
